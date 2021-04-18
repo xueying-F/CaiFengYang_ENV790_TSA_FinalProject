@@ -11,7 +11,7 @@ author: "Chuqi Cai, Xueying Feng, Longyi Yang"
 fontsize: 12pt
 mainfont: Times New Roman
 editor_options: 
-  chunk_output_type: console
+  chunk_output_type: inline
 ---
 
 \newpage
@@ -85,6 +85,7 @@ str(Wind_Gen)
 Wind_Gen$Time <- as.Date(Wind_Gen$utc_timestamp, format='%Y-%m-%d %H:%M:%OS')
 str(Wind_Gen)
 
+#Wind_Gen$Time=floor_date(ymd(Wind_Gen$Time),unit="week",week_start = 4)
 
 Wind_Gen_new <-  Wind_Gen%>%
   group_by(Time) %>%
@@ -92,7 +93,23 @@ Wind_Gen_new <-  Wind_Gen%>%
             Daily_offwind_gen = sum(wind_offshore_generation_actual, na.rm = TRUE),
             Daily_onwind_gen = sum(wind_onshore_generation_actual, na.rm = TRUE))
 
+# Wind_Gen_new <-  Wind_Gen%>%
+#   group_by(Time=floor_date(Time, "month")) %>%
+#   summarize(Daily_wind_gen = sum(wind_generation_actual, na.rm = TRUE),
+#             Daily_offwind_gen = sum(wind_offshore_generation_actual, na.rm = TRUE),
+#             Daily_onwind_gen = sum(wind_onshore_generation_actual, na.rm = TRUE))
+
+# Wind_Gen_new <-  Wind_Gen%>%
+#   group_by(Time=floor_date(Time,unit="week",week_start = 4)) %>%
+#   summarize(Daily_wind_gen = sum(wind_generation_actual, na.rm = TRUE),
+#             Daily_offwind_gen = sum(wind_offshore_generation_actual, na.rm = TRUE),
+#             Daily_onwind_gen = sum(wind_onshore_generation_actual, na.rm = TRUE))
+
+str(Wind_Gen_new) #Tibbles
+
+Wind_Gen_new <- as.data.frame(Wind_Gen_new)
 str(Wind_Gen_new)
+tail(Wind_Gen_new)
 ```
 
 
@@ -104,8 +121,14 @@ full<-Wind_Gen_new[which(Wind_Gen_new$Time>="2015-01-01" & Wind_Gen_new$Time<="2
 str(sample)
 
 #Convert to time series
-sample_ts<-ts(sample[,2:4], frequency = 12, start = c(2015,1,1))
-full_ts<-ts(full[,2:4], frequency = 12, start = c(2015,1,1))
+sample_ts<-ts(sample[,2:4], frequency = 365, start = c(2015,1,1), end = c(2020,01,01))
+full_ts<-ts(full[,2:4], frequency = 365, start = c(2015,1,1))
+
+# sample_ts<-ts(sample[,2:4], frequency = 12, start = c(2015,1,1), end = c(2019,12,31))
+# full_ts<-ts(full[,2:4], frequency = 12, start = c(2015,1,1))
+
+# sample_ts<-ts(sample[,2:4], frequency = 7, start = c(2015,1,1), end = c(2019,12,31))
+# full_ts<-ts(full[,2:4], frequency = 7, start = c(2015,1,1))
 
 ```
 
@@ -120,12 +143,18 @@ ggplot(sample, aes(x=Time, y=sample$Daily_wind_gen)) +
   theme(legend.position = "right") +
   scale_x_date(date_breaks = "1 years", date_labels = "%Y")
 
-## Comment: look at onshore data first
+```
+```{r Onshore wind generation data}
+#look at onshore data first
+Onshore_ts <- sample_ts[,3]
+
+par(mfrow=c(1,1))
+plot(Onshore_ts)
 
 #ACF and PACF plots
 par(mar=c(3,3,3,0));par(mfrow=c(1,2))
-ACF_Plot <- Acf(sample_ts[,2], lag = 40, plot = TRUE,main="ACF of Onshore wind")
-PACF_Plot <- Pacf(sample_ts[,2], lag = 40, plot = TRUE,main="PACF of Onshore wind")
+Acf(Onshore_ts, lag = 100, plot = TRUE,main="ACF of Onshore wind")
+Pacf(Onshore_ts, lag = 100, plot = TRUE,main="PACF of Onshore wind")
 ```
 
 
@@ -134,19 +163,280 @@ PACF_Plot <- Pacf(sample_ts[,2], lag = 40, plot = TRUE,main="PACF of Onshore win
 # Analysis
 
 ## Anlysis Trends
--trends
-```{r}
 
+```{r decompose}
+#The decompose() splits the time series into seasonality, trend and error components.
+#Identify if a timeseries is additive or multiplicative: IF the variance in the graph is constant through out from central line then its additive else multiplicative.
+Onshore_ts_decompose <- decompose(Onshore_ts,type = "additive") #random value -4*10^5 to 2*20^5
+Onshore_ts_decompose2 <- decompose(Onshore_ts,type = "multiplicative") #random value 0-3
+
+plot(Onshore_ts,yax.flip = TRUE)
+plot(Onshore_ts_decompose,yax.flip = TRUE)
+plot(Onshore_ts_decompose2,yax.flip = TRUE)
+
+#Additive model is used when the variance of the time series doesn't change over different values of the time series.
+#On the other hand, if the variance is higher when the time series is higher then it often means we should use a multiplicative models.
+
+#In this case, the size of the seasonal and random fluctuations change over time and the level of the time series, it is a multiplicative time series.
+Onshore_additiveTS <- log (Onshore_ts) #A multiplicative time series can be converted to additive by taking a log of the time series.
+
+plot(Onshore_additiveTS)
+
+Onshore_ts_decompose3 <- decompose(Onshore_additiveTS,type = "additive")
+plot(Onshore_ts_decompose3,yax.flip = TRUE)
+
+##The trend component is an increasing pattern. The random component is kind of randomness, so there still are some seasonality on that.
+```
+
+
+```{r Detrend-Diff()}
+#first-differencing a time series will remove a linear trend (i.e., differences = 1); 
+#twice-differencing will remove a quadratic trend (i.e., differences = 2). 
+#In addition, first-differencing a time series at a lag equal to the period will remove a seasonal trend
+Onshore_ts_diff <- diff(Onshore_ts, differences = 1)  #lag? 
+
+#plot
+plot(Onshore_ts_diff)
+
+#ACF and PACF plots
+par(mar=c(3,3,3,0));par(mfrow=c(1,2))
+Acf(Onshore_ts_diff, lag = 100, plot = TRUE,main="ACF of Onshore wind")
+Pacf(Onshore_ts_diff, lag = 100, plot = TRUE,main="PACF of Onshore wind")
+```
+
+```{r Fit a linear trend + Detrend}
+str(sample_ts)
+nobsv <- nrow(sample_ts) #int 
+nobsv <- nobsv-1+1 #numeric
+
+n <- c(1:nobsv) #Create vector n
+
+#Fit a linear trend 
+Onshore_ts_LinearTrend <- lm(sample_ts[,3]~n) 
+print(summary(Onshore_ts_LinearTrend))
+
+beta0=as.numeric(Onshore_ts_LinearTrend$coefficients[1])  #first coefficient is the intercept term or beta0
+beta1=as.numeric(Onshore_ts_LinearTrend$coefficients[2])  #second coefficient is the slope or beta1
+print(beta0)
+print(beta1)
+
+#Remove the trend
+Onshore_ts_Detrend <- sample_ts[,3]-(beta0+beta1*n)
+
+print(ggplot(sample, aes(x=Time, y=sample$Daily_onwind_gen)) +
+            geom_line(color="blue") +
+            ylab("Wind Generation (MW)") +
+            geom_smooth(color="red",method="lm") +
+            geom_line(aes(y=Onshore_ts_Detrend), col="green")+
+            geom_smooth(aes(y=Onshore_ts_Detrend),color="orange",method="lm"))
+
+##First, Detrend plot makes a time series more smoothed and stationary, which does not have obvious increasing or decreasing trend. Second, the value changes near the 0.
+
+par(mar=c(3,3,3,0));par(mfrow=c(1,2))
+Acf(Onshore_ts_Detrend, lag = 100, plot = TRUE,main="ACF of detrend Onshore wind")
+Pacf(Onshore_ts_Detrend, lag = 100, plot = TRUE,main="PACF of detrend Onshore wind")
+
+##Note that blue line is our original series, red lien is our trend, green line is our original series minus the trend or in other words the detrended series. And in orange is the trend line for the detrended series which has slope 0 meaning we were able to effectively eliminate the trend with a linear model.
+
+# Check: resid(trModel) contains the de-trended series
+# plot(resid(Onshore_ts_LinearTrend), type="l")
+# par(mar=c(3,3,3,0));par(mfrow=c(1,2))
+# acf(resid(Onshore_ts_LinearTrend), lag = 100, plot = TRUE, main="ACF of detrend Onshore wind")
+# pacf(resid(Onshore_ts_LinearTrend), lag = 100, plot = TRUE, main="PACF of detrend Onshore wind")
+
+```
+
+
+```{r trend test}
+#Run Mann Kendall
+#There is seasonality in data, so use "SeasonalMannKendall"
+# H0: There is no trend present in the data (stationary)
+# H1: A trend is present in the data
+
+SMKtest_Onshore_ts <- SeasonalMannKendall(Onshore_ts) 
+print("Results for Mann Kendall") 
+print(summary(SMKtest_Onshore_ts))
+
+##p-value less < 0.05, we reject null hypothesis. time and onshore wind generation have significant positive correlation, and data has a derterministic trend.
+
+```
+
+
+```{r auto.arima detrend}
+A <- auto.arima(Onshore_ts_Detrend)
+print(A)
+checkresiduals(A)
+
+B <- auto.arima(Onshore_ts_diff)
+print(B)
+checkresiduals(B)
 ```
 
 ## Anlysis Seasonality
--seasonality
-```{r}
+
+```{r Seasonal Differencing?}
+# Seasonal Differencing
+print(ndiffs(Onshore_ts)) # number for differencing needed
+print(ndiffs(Onshore_ts_Detrend))  
+print(ndiffs(Onshore_ts_diff))
+
+print(nsdiffs(Onshore_ts))
+print(nsdiffs(Onshore_ts_Detrend))  # number for seasonal differencing needed
+print(nsdiffs(Onshore_ts_diff))
 
 ```
 
+
+```{r Seasonally Adjusting 1}
+OnshoreSeasonAdj <- Onshore_ts - Onshore_ts_decompose$seasonal
+plot.ts(OnshoreSeasonAdj)
+par(mfrow=c(1,2))
+Acf(OnshoreSeasonAdj, lag = 100, plot = TRUE,,main="")
+Pacf(OnshoreSeasonAdj, lag = 100, plot = TRUE,main="")
+
+# adf.test(OnshoreSeasonAdj)
+# MannKendall(OnshoreSeasonAdj)
+```
+
+```{r Seasonally Adjusting 2-seasadj()}
+stl_Onshore_ts <- stl(Onshore_ts,"periodic")  # decompose the TS
+deseasonal_Onshore_ts <- seasadj(stl_Onshore_ts)  # de-seasonalize
+#plot(deseasonal_Onshore_ts, type="l")  # original series
+#plot(deseasonal_Onshore_ts, type="l")  # seasonal adjusted
+
+#Plot series
+autoplot(Onshore_ts) +
+  ylab("Onshore Wind Generation (MW)") # original series
+
+autoplot(deseasonal_Onshore_ts) +
+  ylab("Onshore Wind Generation (MW)") # seasonal adjusted
+
+
+#ACF and PACF plots
+par(mfrow=c(1,2))
+Acf(deseasonal_Onshore_ts, lag = 100, plot = TRUE,,main="")
+Pacf(deseasonal_Onshore_ts, lag = 100, plot = TRUE,main="")
+
+# adf.test(deseasonal_Onshore_ts)
+# MannKendall(deseasonal_Onshore_ts)
+```
+
+```{r Removing seasonal component}
+#Use seasonal means model
+#First create the seasonal dummies
+dummies <- seasonaldummy(sample_ts[,3])  
+#this function only accepts ts object, no need to add one here because date 
+#object is not a column
+
+#Then fit a linear model to the seasonal dummies
+seas_means_model=lm(sample_ts[,3]~dummies)
+summary(seas_means_model)
+
+#Look at the regression coefficient. These will be the values of Beta
+
+#Store regression coefficients
+beta_int=seas_means_model$coefficients[1]
+beta_coeff=seas_means_model$coefficients[2:365]
+
+#compute seasonal component
+Onshore_seas_comp=array(0,nobsv)
+for(i in 1:nobsv){
+  Onshore_seas_comp[i]=(beta_int+beta_coeff%*%dummies[i,])
+}
+
+#Plot original data and seasonal component
+ggplot(sample, aes(x=Time, y=sample$Daily_onwind_gen)) +
+            geom_line(color="blue") +
+            ylab("Wind Generation (MW)") +
+            geom_line(aes(y=Onshore_seas_comp), col="red")
+
+
+#Removing seasonal component
+deseason_Onshore_ts <- sample_ts[,3]-Onshore_seas_comp
+
+#Understanding what we did
+ggplot(sample, aes(x=Time, y=sample$Daily_onwind_gen)) +
+  geom_line(color="blue") +
+  #geom_smooth(color="red",method="lm") +
+  geom_line(aes(y=deseason_Onshore_ts), col="green")+
+  #geom_smooth(aes(y=deseason_Onshore_ts),color="orange",method="lm") +
+  ylab("Wind Generation (MW)") 
+
+
+adf.test(deseason_Onshore_ts)
+MannKendall(deseason_Onshore_ts)
+```
+
+
+
+```{r Removing seasonal component from detrend data}
+#Use seasonal means model
+#First create the seasonal dummies
+dummies <- seasonaldummy(Onshore_ts_Detrend)  
+#this function only accepts ts object, no need to add one here because date 
+#object is not a column
+
+#Then fit a linear model to the seasonal dummies
+seas_means_model=lm(Onshore_ts_Detrend~dummies)
+summary(seas_means_model)
+
+#Look at the regression coefficient. These will be the values of Beta
+
+#Store regression coefficients
+beta_int=seas_means_model$coefficients[1]
+beta_coeff=seas_means_model$coefficients[2:365]
+
+#compute seasonal component
+Onshore_seas_comp=array(0,nobsv)
+for(i in 1:nobsv){
+  Onshore_seas_comp[i]=(beta_int+beta_coeff%*%dummies[i,])
+}
+
+#Plot original data and seasonal component
+ggplot(sample, aes(x=Time, y=sample$Daily_onwind_gen)) +
+            geom_line(color="blue") +
+            ylab("Wind Generation (MW)") +
+            geom_line(aes(y=Onshore_seas_comp), col="red")
+
+
+#Removing seasonal component
+deseason_Onshore_ts <- Onshore_ts_Detrend-Onshore_seas_comp
+
+#Understanding what we did
+ggplot(sample, aes(x=Time, y=sample$Daily_onwind_gen)) +
+  geom_line(color="blue") +
+  ylab("Wind Generation (MW)") +
+  geom_smooth(color="red",method="lm") +
+  geom_line(aes(y=Onshore_ts_Detrend), col="purple")+
+  #geom_smooth(aes(y=Onshore_ts_Detrend),color="yellow",method="lm") 
+  geom_line(aes(y=deseason_Onshore_ts), col="green")+
+  geom_smooth(aes(y=deseason_Onshore_ts),color="orange",method="lm") 
+
+
+adf.test(deseason_Onshore_ts) #stationary
+MannKendall(deseason_Onshore_ts) # no derterministic trend
+```
+
+
 ## Tests
--stationary test
+
+```{r stationary test}
+#Start by running ADF to check for unit root. Remember unit root is related to stochastic trend
+# H0: data has unit root
+# H1: data is stationary
+adf.test(deseasonal_Onshore_ts)
+
+# Answer: pvalue < 0.05 so we reject H0, meaning the series does not have a stochastic trend, but we still need to check for a deterministic trend. The alternative hypothesis only mean the data is stationary for a stochastic trend (ARMA process).
+
+#Run Mann Kendall
+# H0: data is stationary
+# H1: data follow a trend
+MannKendall(deseasonal_Onshore_ts)
+
+#Answer: pvalue less < 0.05, once again we reject null hypothesis. Data has a derterministic trend (ARIMA process with d=1).
+
+
+```
 
 
 
@@ -154,6 +444,23 @@ PACF_Plot <- Pacf(sample_ts[,2], lag = 40, plot = TRUE,main="PACF of Onshore win
 
 # Model building
 -Auto Correlation Function
+
+```{r}
+deseasonal_Onshore_fit <- auto.arima(deseasonal_Onshore_ts)
+print(deseasonal_Onshore_fit)
+checkresiduals(deseasonal_Onshore_fit)
+
+deseasonal_Onshore_fit2 <- auto.arima(deseason_Onshore_ts)
+print(deseasonal_Onshore_fit2)
+checkresiduals(deseasonal_Onshore_fit2)
+```
+
+```{r}
+Onshore_fit <- auto.arima(Onshore_ts)
+print(Onshore_fit)
+checkresiduals(Onshore_fit)
+```
+
 -Partial Correlation Function
 -Model Parameter Estimation
 
@@ -163,6 +470,33 @@ PACF_Plot <- Pacf(sample_ts[,2], lag = 40, plot = TRUE,main="PACF of Onshore win
 
 # Perform Forecast
 -Forecast
+
+```{r}
+#Using auto.arima
+SARIMA_autofit <- auto.arima(Onshore_ts)
+checkresiduals(SARIMA_autofit)
+
+SARIMA_forecast <- forecast(SARIMA_autofit, h=12)
+plot(SARIMA_forecast)
+
+par(mar=c(2,5,3,2))
+plot(SARIMA_forecast, type="l", xlab="Year",ylab="Wind Generation (MW)")
+lines(full_ts[,3], col="red")
+legend("topright", 
+  legend=c("12-month-ahead forecast with original data (2015-2019)","original data(2015-2020)"), 
+  col = c("black", "red"),
+  lty=1:1, 
+  cex=0.5)
+
+```
+
+
+```{r}
+SSES_seas <- es(Onshore_ts,model="ZZZ",h=12,holdout=FALSE)
+plot(SSES_seas)
+checkresiduals(SSES_seas)
+```
+
 -Model Accuracy
 (use 2015-2019 to forecast 2020, use the accuracy to select the model)
 -Model Selection
