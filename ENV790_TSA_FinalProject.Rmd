@@ -1,0 +1,179 @@
+---
+output: 
+  pdf_document:
+    keep_tex: yes
+    fig_caption: yes
+    number_sections: yes
+geometry: margin=2.54cm
+title: "Wind Energy Consumption/Production Trend Analysis and Forecast"
+subtitle: "Time Series Analysis and Forecast"
+author: "Chuqi Cai, Xueying Feng, Longyi Yang"
+fontsize: 12pt
+mainfont: Times New Roman
+editor_options: 
+  chunk_output_type: console
+---
+
+\newpage
+\tableofcontents 
+\newpage
+\listoftables 
+\newpage
+\listoffigures 
+\newpage
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Set your working directory
+getwd()
+setwd("~/Desktop/ENV 790 Time Series/CaiFengYang_ENV790_TSA_FinalProject")
+
+# Load your packages
+library(plyr) #Tools for Splitting, Applying and Combining Data
+library(tidyverse) #Getting data frames to tidy
+library(lubridate) #For dates and date-times
+
+require(ggplot2)
+#install.packages("ggrepel") 
+require(ggrepel)
+
+#Load/install required package here
+library(forecast)  
+library(Kendall)
+library(tseries)
+#library(outliers)
+library(smooth)
+
+# Set your ggplot theme
+mytheme <- theme_minimal(base_size = 12, base_family = "Times") + 
+  theme(axis.text.x = element_text(color = "DarkGrey"),
+        legend.position = "top") 
+theme_set(mytheme)
+```
+
+
+# Rationale and Research Questions
+
+
+\newpage
+
+# Dataset Information
+
+## Database Information
+Introduce the source of our Data
+
+## Data Content Information
+Introduce the variable we are focusing on. Metadata from https://data.open-power-system-data.org/time_series/
+
+
+
+
+\newpage
+
+
+# Exploratory Analysis 
+-wrangle data: sum up the generation per day. 
+-initial plots (clean data if necessary, outliers, missing data)
+-decompose
+
+```{r Clean data}
+# Load your datasets
+Wind_Gen <- read.csv("./Data/DE_Wind_Generation_Data.csv")
+str(Wind_Gen)
+
+# Clean time column
+Wind_Gen$Time <- as.Date(Wind_Gen$utc_timestamp, format='%Y-%m-%d %H:%M:%OS')
+str(Wind_Gen)
+
+
+Wind_Gen_new <-  Wind_Gen%>%
+  group_by(Time) %>%
+  summarize(Daily_wind_gen = sum(wind_generation_actual, na.rm = TRUE),
+            Daily_offwind_gen = sum(wind_offshore_generation_actual, na.rm = TRUE),
+            Daily_onwind_gen = sum(wind_onshore_generation_actual, na.rm = TRUE))
+
+str(Wind_Gen_new)
+```
+
+
+```{r Covert to Time Series}
+#Observations start in January 2015 and end in Sep 2020
+sample<-Wind_Gen_new[which(Wind_Gen_new$Time>="2015-01-01" & Wind_Gen_new$Time<="2019-12-31"),]
+full<-Wind_Gen_new[which(Wind_Gen_new$Time>="2015-01-01" & Wind_Gen_new$Time<="2020-09-30"),]
+
+str(sample)
+
+#Convert to time series
+sample_ts<-ts(sample[,2:4], frequency = 12, start = c(2015,1,1))
+full_ts<-ts(full[,2:4], frequency = 12, start = c(2015,1,1))
+
+```
+
+
+```{r Plot}
+#Plot 
+ggplot(sample, aes(x=Time, y=sample$Daily_wind_gen)) +
+  geom_line(color="blue") +
+  ylab("Wind Generation (MW)") +
+  geom_line(aes(y=sample$Daily_offwind_gen, col="Offshore Wind"))+
+  geom_line(aes(y=sample$Daily_onwind_gen, col="Onshore wind"))+
+  theme(legend.position = "right") +
+  scale_x_date(date_breaks = "1 years", date_labels = "%Y")
+
+## Comment: look at onshore data first
+
+#ACF and PACF plots
+par(mar=c(3,3,3,0));par(mfrow=c(1,2))
+ACF_Plot <- Acf(sample_ts[,2], lag = 40, plot = TRUE,main="ACF of Onshore wind")
+PACF_Plot <- Pacf(sample_ts[,2], lag = 40, plot = TRUE,main="PACF of Onshore wind")
+```
+
+
+\newpage
+
+# Analysis
+
+## Anlysis Trends
+-trends
+```{r}
+
+```
+
+## Anlysis Seasonality
+-seasonality
+```{r}
+
+```
+
+## Tests
+-stationary test
+
+
+
+\newpage
+
+# Model building
+-Auto Correlation Function
+-Partial Correlation Function
+-Model Parameter Estimation
+
+
+
+\newpage
+
+# Perform Forecast
+-Forecast
+-Model Accuracy
+(use 2015-2019 to forecast 2020, use the accuracy to select the model)
+-Model Selection
+
+\newpage
+
+# Forecast Output
+-forecast generation in 2021: forecast plots
+
+\newpage
+
+# Forecast Limitation
+-How to improve our model
+
