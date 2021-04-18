@@ -26,7 +26,7 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE)
 # Set your working directory
 getwd()
-setwd("~/Desktop/ENV 790 Time Series/CaiFengYang_ENV790_TSA_FinalProject")
+#setwd("~/Desktop/ENV 790 Time Series/CaiFengYang_ENV790_TSA_FinalProject")
 
 # Load your packages
 library(plyr) #Tools for Splitting, Applying and Combining Data
@@ -109,7 +109,7 @@ str(Wind_Gen_new) #Tibbles
 
 Wind_Gen_new <- as.data.frame(Wind_Gen_new)
 str(Wind_Gen_new)
-tail(Wind_Gen_new)
+#tail(Wind_Gen_new)
 ```
 
 
