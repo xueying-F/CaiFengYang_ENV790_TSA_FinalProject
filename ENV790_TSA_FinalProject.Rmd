@@ -61,6 +61,9 @@ Introduce the source of our Data
 ## Data Content Information
 Introduce the variable we are focusing on. Metadata from https://data.open-power-system-data.org/time_series/
 
+```{r Data Information, table1, echo=FALSE, message=FALSE, warnings=FALSE, results='asis'}
+
+```
 
 
 
@@ -71,7 +74,7 @@ Introduce the variable we are focusing on. Metadata from https://data.open-power
 -initial plots (clean data if necessary, outliers, missing data)
 -decompose
 ## Importing data
-```{r warning = FALSE}
+```{r results='hide',warning = FALSE}
 # Import dataset
 Wind_Gen <- read.csv("./Data/DE_Wind_Generation_Data.csv")
 str(Wind_Gen)
@@ -114,7 +117,7 @@ tail(Wind_Gen_new)
 
 ## Transforming data into time series objects
 
-```{r}
+```{r results='hide', message=FALSE, warning=FALSE}
 # Split time series data for training and test set
 sample<-Wind_Gen_new[which(Wind_Gen_new$Time>="2015-01-01" & Wind_Gen_new$Time<="2019-12-31"),]
 full<-Wind_Gen_new[which(Wind_Gen_new$Time>="2015-01-01" & Wind_Gen_new$Time<="2020-09-30"),]
@@ -135,7 +138,7 @@ full_ts<-msts(full[,2:4], seasonal.periods = c(52), start = c(2015,1,1))
 
 ## Initial Plots
 
-```{r message=FALSE, warning=FALSE}
+```{r fig.cap="Wind Generation in Germany 2015-2019", message=FALSE, warning=FALSE}
 #Plot 
 ggplot(sample, aes(x=Time, y=Weekly_Wind_Gen)) +
   geom_line(color="blue") +
@@ -155,7 +158,7 @@ ggplot(sample, aes(x=Time, y=Weekly_Wind_Gen)) +
 
 ## Onshore Wind data
 
-```{r Onshore wind generation data}
+```{r Onshore wind generation data, fig.cap=paste("Onshore Wind Generation"),fig.cap=paste("ACF and PACF of Onshore Wind Generation")}
 #look at onshore data first
 Onshore_sample_ts <- sample_ts[,3]
 Onshore_full_ts <- full_ts[,3]
@@ -174,12 +177,18 @@ Pacf(Onshore_sample_ts, lag = 100, plot = TRUE,main="PACF of Onshore wind")
 
 ## Onshore Wind data (log)
 
-```{r message=FALSE, warning=FALSE}
+```{r fig.cap=paste("Loggged Onshore Wind Generation"), message=FALSE, warning=FALSE}
 #A multiplicative time series can be converted to additive by taking a log of the time series.
 #log  data
 Onshore_sample_logts <- log (Onshore_sample_ts)
 Onshore_full_logts <- log (Onshore_full_ts) 
 
+plot(Onshore_sample_logts, col = 'blue')
+
+#ACF and PACF for logged data
+par(mar=c(3,3,3,0));par(mfrow=c(1,2))
+Acf(Onshore_sample_logts, lag = 100, plot = TRUE,main="ACF of Logged Onshore Wind Data")
+Pacf(Onshore_sample_logts, lag = 100, plot = TRUE,main="PACF of Logged Onshore Wind Data")
 
 # Create new logged sample data frame
 TimeSample <- as.Date(sample$Time)
@@ -197,10 +206,10 @@ class(OnshoreFull_log)
 head(OnshoreFull_log)
 
 #Plot log onshore wind data
-ggplot(OnshoreSample_log, aes(x=TimeSample, y=Onshore_sample_logts)) +
-  geom_line(color="blue") +
-  ylab("Logged Onshore Wind Generation") +
-  geom_smooth(color="red",method="lm") 
+# ggplot(OnshoreSample_log, aes(x=TimeSample, y=Onshore_sample_logts)) +
+#   geom_line(color="blue") +
+#   ylab("Logged Onshore Wind Generation") +
+#   geom_smooth(color="red",method="lm") 
 ```
 
 \newpage
@@ -209,7 +218,7 @@ ggplot(OnshoreSample_log, aes(x=TimeSample, y=Onshore_sample_logts)) +
 
 ## Decomposing time series objects
 
-```{r Decompose}
+```{r Decompose, fig.cap=paste("Decomposition of Logged Onshore Wind Generation")}
 #The decompose() splits the time series into seasonality, trend and error components.
 #Identify if a timeseries is additive or multiplicative: IF the variance in the graph is constant through out from central line then its additive else multiplicative.
 
@@ -311,11 +320,11 @@ Pacf(deseasonal_Onshore_sample_logts, lag = 100, plot = TRUE,main="")
 n_for <- 40 #play with this, change to 12, 23, 2 and check of the best model is still the same
 
 Sample_obs <- nrow(OnshoreSample_log)
-#last_obs
+#Sample_last_obs (log)
 OnshoreSampleLast_obs <- Onshore_sample_logts[(Sample_obs-n_for+1):Sample_obs]
 
 Full_obs <- nrow(OnshoreFull_log)
-#last_obs
+#Full_last_obs (log)
 OnshoreFullLast_obs <- Onshore_full_logts[(Full_obs-n_for+1):Full_obs] 
 
 ```
@@ -501,7 +510,7 @@ autoplot(Onshore_full_logts) +
 ```
 
 ```{r last two years plots, message=FALSE, warning=FALSE}
-autoplot(window(Onshore_full_logts,start=2019)) +
+autoplot(window(Onshore_full_logts,start=2020)) +
   #autolayer(OnshoreLog_MEAN_seas, PI=FALSE, series="Arithmetic mean") +
   autolayer(OnshoreLog_SNAIVE_seas, PI=FALSE, series="Seasonal Naive") +
   autolayer(OnshoreLog_ARIMA_for, PI=FALSE, series="ARIMA") +
@@ -519,13 +528,13 @@ autoplot(window(Onshore_full_logts,start=2019)) +
 ### Model Accuracy
 (use 2015-2019 to forecast 2020, use the accuracy to select the model)
 
-```{r Accuracy Scores}
+```{r Accuracy Scores & table, echo=FALSE, message=FALSE, warning=FALSE}
 #Model 1: Arithmetic mean
 #OnshoreLog_MEAN_scores <- accuracy(OnshoreLog_MEAN_seas)  #store the performance metrics
 
 #Model 2: Seasonal naive 
-OnshoreLog_SNAIVE_scores <- accuracy(OnshoreLog_SNAIVE_seas, OnshoreFullLast_obs)
-OnshoreLog_SNAIVETest_scores <- OnshoreLog_SNAIVE_scores[2]
+OnshoreLog_SNAIVE_scores <- accuracy(OnshoreLog_SNAIVE_seas$mean, OnshoreFullLast_obs)
+#OnshoreLog_SNAIVETest_scores <- OnshoreLog_SNAIVE_scores[2]
 
 # Model 3: ARIMA
 OnshoreLog_ARIMA_for_scores <- accuracy(OnshoreLog_ARIMA_for,OnshoreFullLast_obs)  #store the performance metrics
@@ -551,26 +560,81 @@ OnshoreLog_TBATS_scores <- accuracy(OnshoreLog_TBATS_for$mean,OnshoreFullLast_ob
 
 #create data frame
 Onshore_scores <- as.data.frame(
-  rbind(OnshoreLog_SNAIVETest_scores, OnshoreLog_ARIMA_for_scores, OnshoreLog_SSES_scores, 
+  rbind(OnshoreLog_SNAIVE_scores, OnshoreLog_ARIMA_for_scores, OnshoreLog_SSES_scores, 
         OnshoreLog_ETS_scores, OnshoreLog_ARIMA_Four_scores, OnshoreLog_TBATS_scores))
 row.names(Onshore_scores) <- c("SNAIVE","ARIMA","SSES","STL+ETS","ARIMA+Fourier","TBATS")
 
 #choose model with lowest MPE/RMSE
-best_model_index <- which.min(Onshore_scores[,"MPE"])
-cat("The best model by MPE is:", row.names(Onshore_scores[best_model_index,]))
-```
+best_model_index <- which.min(Onshore_scores[,"RMSE"])
+cat("The best model by RMSE is:", row.names(Onshore_scores[best_model_index,]))
 
-
-```{r Model Accuracy Table, echo=FALSE, message=FALSE, warning=FALSE}
+#Create table
 library(kableExtra)
 kbl(Onshore_scores,
-    caption = "Forecast Accuracy for Data",
+    caption = "Forecast Accuracy for Data (log)",
     digits = array(7,ncol(Onshore_scores))) %>%
   kable_styling(full_width = FALSE, position = "center") %>%
-  #highlight model with lowest MPE
-  #kable_styling(latex_options="striped", stripe_index = which.min(Onshore_scores[,"MPE"]))
+  #highlight model with lowest RMSE
+  #kable_styling(latex_options="striped", stripe_index = which.min(Onshore_scores[,"RMSE"]))
   row_spec(best_model_index, bold=T, color="black", background = "yellow")
 ```
+
+
+```{r Accuracy Scores (exp) & table, echo=FALSE, message=FALSE, warning=FALSE}
+#Full_last_obs
+Last_obs_exp <- Onshore_full_ts[(Full_obs-n_for+1):Full_obs] 
+
+#Model 1: Arithmetic mean
+#OnshoreLog_MEAN_scores <- accuracy(OnshoreLog_MEAN_seas)  #store the performance metrics
+
+#Model 2: Seasonal naive 
+Onshore_SNAIVE_scores <- accuracy(exp(OnshoreLog_SNAIVE_seas$mean), Last_obs_exp)
+#OnshoreLog_SNAIVETest_scores <- OnshoreLog_SNAIVE_scores[2]
+
+# Model 3: ARIMA
+Onshore_ARIMA_for_scores <- accuracy(exp(OnshoreLog_ARIMA_for),Last_obs_exp)  #store the performance metrics
+
+# Model 4: SARIMA
+#OnshoreLog_SARIMA_scores <- accuracy(OnshoreLog_SARIMA_fore$mean,OnshoreFullLast_obs)
+
+# Model 3:  SSES
+Onshore_SSES_scores <- accuracy(exp(OnshoreLog_SSES_seas$forecast),Last_obs_exp)
+
+# Model 6:  BSM 
+#OnshoreLog_SS_scores <- accuracy(OnshoreLog_SS_forecast$mean,OnshoreFullLast_obs)
+
+#Model 7: STL + ETS
+Onshore_ETS_scores <- accuracy(exp(OnshoreLog_ETS_fit$mean),Last_obs_exp)  
+
+#Model 8: ARIMA + Fourier 
+Onshore_ARIMA_Four_scores <- accuracy(exp(OnshoreLog_ARIMA_Four_for$mean),Last_obs_exp)
+
+# Model 9:  TBATS 
+Onshore_TBATS_scores <- accuracy(exp(OnshoreLog_TBATS_for$mean),Last_obs_exp)
+
+
+#create data frame
+Onshore_scores_exp <- as.data.frame(
+  rbind(Onshore_SNAIVE_scores, Onshore_ARIMA_for_scores, Onshore_SSES_scores, 
+        Onshore_ETS_scores, Onshore_ARIMA_Four_scores, Onshore_TBATS_scores))
+row.names(Onshore_scores_exp) <- c("SNAIVE","ARIMA","SSES","STL+ETS","ARIMA+Fourier","TBATS")
+
+#choose model with lowest MPE/RMSE
+best_model_index <- which.min(Onshore_scores_exp[,"RMSE"])
+cat("The best model by RMSE is:", row.names(Onshore_scores_exp[best_model_index,]))
+
+#Create table
+library(kableExtra)
+kbl(Onshore_scores_exp,
+    caption = "Forecast Accuracy for Data (exp)",
+    digits = array(7,ncol(Onshore_scores_exp))) %>%
+  kable_styling(full_width = FALSE, position = "center") %>%
+  #highlight model with lowest RMSE
+  #kable_styling(latex_options="striped", stripe_index = which.min(Onshore_scores_exp[,"RMSE"]))
+  row_spec(best_model_index, bold=T, color="black", background = "yellow")
+```
+
+
 
 -Model Selection
 
@@ -579,37 +643,71 @@ kbl(Onshore_scores,
 # Forecast Onshore Wind Generation in 2021
 
 ```{r Forecast 2021 varible}
-n_week <- Full_obs-Sample_obs+1+52
+n_week <- 6*52-Full_obs+52
 
 ```
 
 
+```{r TBATS2021, message=FALSE, warning=FALSE}
+# Lowest RMSE, MAE, MAPE in Accuracy table (logged and exponential one)
+# TBATS is a trigonometric seasonal variation of BATS
+OnshoreLog_TBATS_fit2021 <- tbats(Onshore_full_logts)
+
+OnshoreLog_TBATS_for2021 <- forecast(OnshoreLog_TBATS_fit2021, h=n_week)
+
+
+#Plot model + observed data
+autoplot(Onshore_full_ts) +
+  autolayer(exp(OnshoreLog_TBATS_for2021$mean), series="Mean TBATS",PI=FALSE)+
+  autolayer(exp(OnshoreLog_TBATS_for2021$lower), series="Lower TBATS",PI=FALSE)+
+  autolayer(exp(OnshoreLog_TBATS_for2021$upper), series="Upper TBATS",PI=FALSE)+
+  ylab("Onshore Wind Generation (MW)") 
+```
+
+
 ```{r SSES 2021 forcast, message=FALSE, warning=FALSE}
+# Lowest ME, MPE in Accuracy table (logged one)
 # Exponential smoothing under the state space model
 # ES can be used to represent trend and seasonal
 OnshoreLog_SSES_2021 <- es(Onshore_full_logts,model="MAM",h=n_week,holdout=FALSE, silent = "output")
 plot(OnshoreLog_SSES_2021)
 checkresiduals(OnshoreLog_SSES_2021)
-```
 
-
-```{r message=FALSE, warning=FALSE}
-OnshoreLog_SNAIVE_2021 <- snaive(Onshore_full_logts, h=n_week)
-checkresiduals(OnshoreLog_SNAIVE_2021)
-plot(OnshoreLog_SNAIVE_2021)
-
-```
-
-
-```{r STL + ETS 2021 forcast, message=FALSE, warning=FALSE}
-#Fit and forecast STL + ETS model to data
-OnshoreLog_ETS_fit2021 <-  stlf(Onshore_full_logts,h=n_week)
-
-#Plot foresting results
-autoplot(OnshoreLog_ETS_fit2021) + ylab("Logged Onshore Wind Generation")
+# Computes exponential
+autoplot(Onshore_full_ts, series="Original line") +
+  autolayer(exp(OnshoreLog_SSES_2021$forecast))+
+  xlab("Year") + 
+  ylab("Onshore Wind Generation (MW)") 
 
 
 ```
+
+
+```{r ARIMA exp plot, message=FALSE, warning=FALSE}
+## Lowest MPE in Accuracy table (exponential one)
+#Check exponential plot
+par(mar=c(2,4,1,0))
+plot(Onshore_full_ts, type="l", xlab="Year",ylab="Onshore Wind Generation")
+lines(exp(OnshoreLog_ARIMA_for), col="red")
+legend("topright", 
+  legend=c("original seasonal data(2015-2020)","forecast data with seasonality (2020)"), 
+  col = c("black", "red"),
+  lty=1:1, 
+  cex=0.5)
+
+##Compared training dataset with test dataset, the model did not fi very well. 
+```
+
+
+
+```{r SNAIVE2021, message=FALSE, warning=FALSE}
+## Lowest ME in Accuracy table (exponential one)
+Onshore_SNAIVE_seas2021 <- snaive(Onshore_full_ts, h=n_week)
+checkresiduals(Onshore_SNAIVE_seas2021)
+plot(Onshore_SNAIVE_seas2021)
+
+```
+
 
 
 \newpage
