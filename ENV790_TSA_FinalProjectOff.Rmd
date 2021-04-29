@@ -1,0 +1,378 @@
+---
+title: "Wind Energy Consumption/Production Trend Analysis and Forecast"
+author: "Chuqi Cai, Xueying Feng, Longyi Yang"
+fontsize: 12pt
+output:
+  pdf_document:
+    fig_caption: yes
+    keep_tex: yes
+    number_sections: yes
+  html_document:
+    df_print: paged
+mainfont: Times New Roman
+geometry: margin=2.54cm
+subtitle: Time Series Analysis and Forecast
+editor_options:
+  chunk_output_type: inline
+---
+
+\newpage
+\tableofcontents 
+\newpage
+\listoftables 
+\newpage
+\listoffigures 
+\newpage
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Load your packages
+library(plyr) #Tools for Splitting, Applying and Combining Data
+library(tidyverse) #Getting data frames to tidy
+library(lubridate) #For dates and date-times
+
+require(ggplot2)
+#install.packages("ggrepel") 
+require(ggrepel)
+
+#Load/install required package here
+library(forecast)  
+library(Kendall)
+library(tseries)
+#library(outliers)
+library(smooth)
+
+library(kableExtra)
+
+# Set your ggplot theme
+mytheme <- theme_minimal(base_size = 12, base_family = "Times") + 
+  theme(axis.text.x = element_text(color = "DarkGrey"),
+        legend.position = "top") 
+theme_set(mytheme)
+```
+
+
+# Rationale and Research Questions
+
+
+\newpage
+
+# Dataset Information
+
+## Database Information
+Introduce the source of our Data
+
+## Data Content Information
+Introduce the variable we are focusing on. Metadata from https://data.open-power-system-data.org/time_series/
+
+
+
+
+\newpage
+
+
+# Exploratory Analysis 
+-wrangle data: sum up the generation per day. 
+-initial plots (clean data if necessary, outliers, missing data)
+-decompose
+
+```{r Clean data}
+# Load your datasets
+Wind_Gen <- read.csv("./Data/DE_Wind_Generation_Data.csv")
+str(Wind_Gen)
+
+# Clean time column
+Wind_Gen$Time <- as.Date(Wind_Gen$utc_timestamp, format='%Y-%m-%d %H:%M:%OS')
+str(Wind_Gen)
+
+
+Wind_Gen_new <-  Wind_Gen%>%
+  group_by(Time=floor_date(Time,unit="week",week_start = 4)) %>%
+  summarize(Daily_wind_gen = sum(wind_generation_actual, na.rm = TRUE),
+            Daily_offwind_gen = sum(wind_offshore_generation_actual, na.rm = TRUE),
+            Daily_onwind_gen = sum(wind_onshore_generation_actual, na.rm = TRUE))
+
+str(Wind_Gen_new)
+
+```
+
+
+```{r Covert to Time Series}
+#Observations start in January 2015 and end in Sep 2020
+sample<-Wind_Gen_new[which(Wind_Gen_new$Time>="2015-01-01" & Wind_Gen_new$Time<="2019-12-31"),]
+full<-Wind_Gen_new[which(Wind_Gen_new$Time>="2015-01-01" & Wind_Gen_new$Time<="2020-09-30"),]
+
+str(sample)
+
+#Convert to time series
+sample_off <- sample[,c(1,3)]
+sample_ts<-ts(sample[,2:4], frequency = 52, start = c(2015,1,1), end = c(2020,01,01))
+full_ts<-ts(full[,2:4], frequency = 52, start = c(2015,1,1))
+sample_off_ts <- sample_ts[,2]
+
+sample_msts <- msts(sample_off$Daily_offwind_gen,
+                    seasonal.periods = c(52),
+                    start = c(2015,01,01))
+```
+
+
+```{r Plot}
+#Plot 
+ggplot(sample, aes(x=Time, y=sample$Daily_wind_gen)) +
+  geom_line(color="blue") +
+  ylab("Wind Generation (MW)") +
+  geom_line(aes(y=sample$Daily_offwind_gen, col="Offshore Wind"))+
+  geom_line(aes(y=sample$Daily_onwind_gen, col="Onshore wind"))+
+  theme(legend.position = "right") +
+  scale_x_date(date_breaks = "1 years", date_labels = "%Y")
+
+#Plot offshore
+ggplot(sample, aes(x=Time, y=sample$Daily_offwind_gen)) +
+  geom_line(color="blue") +
+  ylab("Wind Generation (MW)") +
+  theme(legend.position = "right") +
+  scale_x_date(date_breaks = "1 years", date_labels = "%Y")
+
+#ACF and PACF plots
+par(mar=c(3,3,3,0));par(mfrow=c(1,2))
+ACF_Plot <- Acf(sample_ts[,3], lag = 100, plot = TRUE,main="ACF of Offshore wind")
+PACF_Plot <- Pacf(sample_ts[,3], lag = 100, plot = TRUE,main="PACF of Offshore wind")
+```
+
+
+\newpage
+
+# Analysis
+
+## Anlysis Trends
+-trends
+```{r}
+#Decompose
+sample_ts_off_decompose <- decompose(sample_ts[,"Daily_offwind_gen"],
+                                 type = "additive")
+sample_ts_off_deseason <- seasadj(sample_ts_off_decompose)
+sample_msts_mstl <- mstl(sample_msts) 
+#plot
+plot(sample_ts_off_decompose)
+plot(sample_ts_off_deseason)
+plot(sample_msts_mstl)
+#ACF and PACF
+acf(sample_ts_off_deseason)
+pacf(sample_ts_off_deseason)
+
+#Mann-Kendall test
+print(
+  summary(MannKendall(sample_ts_off_deseason))
+)
+#The P-value is less than 0.05, so we reject the null hypothesis and 
+#believe that the data has trend.
+
+```
+
+## Anlysis Seasonality
+-seasonality
+```{r}
+#Differencing
+print(ndiffs(sample_ts[,"Daily_offwind_gen"]))
+print(nsdiffs(sample_ts[,"Daily_offwind_gen"]))
+
+```
+
+
+```{r}
+#seasonsdj
+sample_off_seasonadj <- sample_off_ts - sample_ts_off_decompose$seasonal
+plot.ts(sample_off_seasonadj)
+par(mfrow=c(1,2))
+Acf(sample_off_seasonadj)
+Pacf(sample_off_seasonadj)
+
+##
+#create dummy
+dummy_off <- seasonaldummy(sample_ts[,2])
+#fit linear model
+seas_means_model_off <- lm(sample_ts[,2]~dummy_off)
+#store regression coefficients
+beta_int_off <- seas_means_model_off$coefficients[1]
+beta_coeff_off <- seas_means_model_off$coefficients[2:52]
+#compute seasonal component
+nobsv <- nrow(sample_ts)
+nobsv <- nobsv-1+1
+offshore_seas_comp <- array(0,nobsv)
+for (i in 1:nobsv){
+  offshore_seas_comp[i] = (beta_int_off+beta_coeff_off%*%dummy_off[i,])
+}
+#Plot original data and seasonal component
+ggplot(sample, aes(x=Time, y=sample$Daily_offwind_gen)) +
+            geom_line(color="blue") +
+            ylab("Wind Generation (MW)") +
+            geom_line(aes(y=offshore_seas_comp), col="red")
+#remove seasonal component
+deaseason_offshore <- sample_off_ts - offshore_seas_comp
+#plot original off shoredata and deaseasonal offshore data
+ggplot(sample, aes(x=Time, y=sample$Daily_offwind_gen))+
+            geom_line(color="blue")+
+            ylab("Wind Generation (MW)")+
+            geom_line(aes(y=deaseason_offshore), col="red")
+```
+
+## Tests
+-stationary test
+```{r}
+#ADF
+print(
+  adf.test(sample_ts_off_deseason, alternative = "stationary")
+)
+#The P-value is 0.01, less than 0.05, so we reject the null hypothesis and
+#believe that the data is stationary.
+```
+
+
+
+\newpage
+
+# Model building
+-Auto Correlation Function
+-Partial Correlation Function
+-Model Parameter Estimation
+```{r}
+#Sarima model
+sample_off_sarima <- auto.arima(sample_ts[,"Daily_offwind_gen"])
+print(sample_off_sarima)
+checkresiduals(sample_off_sarima)
+
+#Exponential smooth model and forecast(Terrible)
+sample_off_es <- es(sample_ts[,"Daily_offwind_gen"],
+                    model = "ZZZ",
+                    silent = FALSE,
+                    holdout = FALSE,
+                    h = 39)
+plot(sample_off_es)
+
+#BSM model
+sample_off_ss <- StructTS(sample_ts[,"Daily_offwind_gen"],
+                          type = "BSM"
+                          )
+checkresiduals(sample_off_ss)
+sample_off_ss_forecast <- forecast(sample_off_ss,h=39)
+plot(sample_off_ss_forecast)
+
+#STL + ETS
+sample_ets_fit <- stlf(sample_msts,
+                       h=39)
+autoplot(full_ts[,2])+
+  autolayer(sample_ets_fit, 
+            series="STL+ETS",
+            PI=FALSE)+
+  ylab("Wind Generation(MW)")
+
+#ARIMA + FOURIER
+sample_arima_four <- auto.arima(sample_msts,
+                                seasonal = FALSE,
+                                lambda = 0,
+                                xreg = fourier(sample_msts,
+                                               K=12))
+
+#TBATS
+sample_tbats <- tbats(sample_msts)
+
+```
+
+
+
+\newpage
+
+# Perform Forecast
+-Forecast
+-Model Accuracy
+(use 2015-2019 to forecast 2020, use the accuracy to select the model)
+-Model Selection
+```{r}
+#Sarima model
+sample_off_sarima_forecast <- forecast(sample_off_sarima,
+                                       h = 39)
+plot(sample_off_sarima_forecast)
+
+#ARIMA+Fourier
+sample_off_arima_four_forecast <- forecast(sample_arima_four,
+                                           xreg = fourier(sample_msts,
+                                                          K=12,
+                                                          h=39),
+                                           h=39)
+#TBATS
+sample_off_tbats_forecast <- forecast(sample_tbats,
+                                      h=39)
+
+#plots
+autoplot(full_ts[,"Daily_offwind_gen"])+
+  autolayer(sample_off_sarima_forecast, PI = FALSE, series = "SARIMA")+
+  autolayer(sample_off_ss_forecast, PI = FALSE, series = "BSM")+
+  autolayer(sample_off_es$forecast, series = "SSES")+
+  autolayer(sample_ets_fit, 
+            series="STL+ETS",
+            PI=FALSE)+
+  autolayer(sample_off_arima_four_forecast,
+            series = "ARIMA_Fourier",
+            PI=FALSE)+
+  autolayer(sample_off_tbats_forecast,
+            series = "TBATS",
+            PI=FALSE)+
+  xlab("Year")+
+  ylab("Generation(MW)")+
+  coord_cartesian(xlim = c(2019,2021))
+
+```
+```{r}
+
+#Accuracy
+last_obs <- full_ts[262:300,"Daily_offwind_gen"]
+
+sarima_score <- accuracy(sample_off_sarima_forecast$mean, last_obs)
+sses_score <- accuracy(sample_off_es$forecast, last_obs)
+bsm_score <- accuracy(sample_off_ss_forecast$mean, last_obs)
+ets_score <- accuracy(sample_ets_fit$mean,last_obs)
+arima_four_score <- accuracy(sample_off_arima_four_forecast$mean,last_obs)
+tbats_score <- accuracy(sample_off_tbats_forecast$mean,last_obs)
+score_table <-rbind.data.frame(sarima_score,
+                               sses_score,
+                               bsm_score,
+                               ets_score,
+                               arima_four_score,
+                               tbats_score)
+
+rownames(score_table) <- c("SARIMA","SSES","BSM","ETS","ARIMA_FOURIER","TBATS")
+kbl(score_table, 
+      caption = "Forecast Accuracy",
+      digits = array(5,ncol(score_table))) %>%
+  kable_styling(full_width = FALSE, position = "center") %>%
+  kable_styling(latex_options="striped", stripe_index = which.min(score_table[,"MAPE"]))
+```
+
+\newpage
+
+# Forecast Output
+-forecast generation in 2021: forecast plots
+```{r}
+#MSTS
+full_msts <- msts(full$Daily_offwind_gen,
+                    seasonal.periods = c(52),
+                    start = c(2015,01,01))
+
+
+#STL + ETS
+full2021_ets_fit <- stlf(full_msts,
+                       h=52)
+autoplot(full_ts[,2])+
+  autolayer(full2021_ets_fit, 
+            series="STL+ETS",
+            PI=FALSE)+
+  ylab("Wind Generation(MW)")
+
+```
+
+\newpage
+
+# Forecast Limitation
+-How to improve our model
+

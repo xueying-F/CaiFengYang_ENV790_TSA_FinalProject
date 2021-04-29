@@ -1,0 +1,863 @@
+---
+output: 
+  pdf_document:
+    keep_tex: yes
+    fig_caption: yes
+    number_sections: yes
+geometry: margin=2.54cm
+title: "Wind Energy Generation Trend Analysis and Forecast"
+subtitle: "https://github.com/xueying-F/CaiFengYang_ENV790_TSA_FinalProject"
+author: "Chuqi Cai, Xueying Feng, Longyi Yang"
+fontsize: 12pt
+mainfont: Times New Roman
+editor_options: 
+  chunk_output_type: inline
+---
+
+\newpage
+\tableofcontents 
+\newpage
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+# Set your working directory
+#getwd()
+setwd("~/Desktop/CaiFengYang_ENV790_TSA_FinalProject")
+
+# Load/install required packages
+library(plyr) #Tools for Splitting, Applying and Combining Data
+library(tidyverse) #Getting data frames to tidy
+library(lubridate) #For dates and date-times
+library(ggplot2)
+library(forecast)  
+library(Kendall)
+library(tseries)
+#library(outliers)
+library(outliers)
+library(smooth)
+library(zoo)
+library(kableExtra)
+
+# Set your ggplot theme
+mytheme <- theme_minimal(base_size = 12, base_family = "Times") + 
+  theme(axis.text.x = element_text(color = "DarkGrey"),
+        legend.position = "top") 
+theme_set(mytheme)
+```
+
+
+# Rationale and Research Questions
+
+There are increasing number of countries seeking ways to sustiana clean environment, and they developed national policy to reduce fossil fuel based energies and increase the integration of renewable based energy sources, for example, wind and solar power. In 2018, there are 95 percent of the new power installation are for renewable in Europe. The wind power energy generation in European counties meets 14 percent of the total electricity demand. The overall onshore capacity reached 160 GW which meets 12% of the total electricity demand, and the offshore wind capacity reached 18.5 GW.
+
+The increasing demand for renewable wind energy raises interest in the economic issues related to the integration of wind energy into the power grid. The wind forecast could provide information including the onshore and offshore wind energy capacity, and the share of wind energy generation within the whole energy market. An accurate wind power forecasting could help decision makers to conduct better grid planning that integrates this renewable energy into the power systems, and to balance the power supply and demand.
+
+Our research goal is to generate a 2021 forecast for onshore and offshore wind generation in Germany.
+
+\newpage
+
+# Database Information
+We access the wind generation data from the website https://data.open-power-system-data.org/time_series/. This package includes wind and solar load and prices in hourly/half-hourly/quarter-hourly resolution, the geographical coverage of this package includes the EU and some neighbouring countries. This package is updated Oct.2020, and includes the 2015-mid 2020 data from TSOs and ENTSO-E Transparency.
+
+## Data Content Information
+We download the dataset and choose the hourly resolution to conduct the forecasting. Among countries in EU, we choose Germany as a sample and focus on the three data field: actual wind generation, actual onshore wind generation and actual offshore wind generation. The summary of the data content we used in this project is listed in the table below.
+```{r Data Information, table1, echo=FALSE, message=FALSE, warnings=FALSE, results='asis'}
+#install.packages("pander")
+require(pander)
+panderOptions('table.split.table', Inf)
+set.caption("Wind Generation in Germany")
+my.data <- "  Data | Description 
+ Time | 2015 - 2020 
+ Country | Germany 
+ Resolution | Hourly (60 minutes)  
+ DE_wind_offshore_generation_actual| Actual wind_onshore generation in Germany in MW
+ DE_wind_onshore_generation_actual | Actual wind_offshore generation in Germany in MW 
+ DE_wind_generation_actual | Actual wind generation in Germany in MW"
+df <- read.delim(textConnection(my.data),header=FALSE,sep="|",strip.white=TRUE,stringsAsFactors=FALSE)
+names(df) <- unname(as.list(df[1,])) # put headers on
+df <- df[-1,] # remove first row
+row.names(df)<-NULL
+pander(df, style = 'rmarkdown')
+```
+
+```{r Importing data, results='hide'}
+# Import dataset
+Wind_Gen <- read.csv("./Data/DE_Wind_Generation_Data.csv")
+str(Wind_Gen)
+
+# Preparing data 
+## Convert to date object
+Wind_Gen$Time <- as.Date(Wind_Gen$utc_timestamp, format='%Y-%m-%d %H:%M:%OS')
+str(Wind_Gen)
+
+## Aggregate data into weekly
+Wind_Gen_new <-  Wind_Gen %>%
+  group_by(Time=floor_date(Time,unit="week",week_start = 4)) %>%
+  summarize(Weekly_Wind_Gen = sum(wind_generation_actual, na.rm = TRUE),
+            Weekly_Offwind_Gen = sum(wind_offshore_generation_actual, na.rm = TRUE),
+            Weekly_OnWind_Gen = sum(wind_onshore_generation_actual, na.rm = TRUE))
+
+str(Wind_Gen_new)
+
+Wind_Gen_new <- as.data.frame(Wind_Gen_new)
+str(Wind_Gen_new)
+head(Wind_Gen_new)
+tail(Wind_Gen_new)
+```
+
+```{r Transforming to TS, results='hide', message=FALSE, warning=FALSE}
+## Transforming data into time series objects
+
+# Split time series data for training and test set
+sample<-Wind_Gen_new[which(Wind_Gen_new$Time>="2015-01-01" & Wind_Gen_new$Time<="2019-12-31"),]
+full<-Wind_Gen_new[which(Wind_Gen_new$Time>="2015-01-01" & Wind_Gen_new$Time<="2020-09-30"),]
+
+sample_ts<-msts(sample[,2:4], seasonal.periods = c(52), start = c(2015,1,1), end = c(2020,01,01))
+full_ts<-msts(full[,2:4], seasonal.periods = c(52), start = c(2015,1,1))
+
+```
+
+\newpage
+
+# Analysis (Methods and Models)
+
+## Data Set Overview 
+The first step of the project is to wrangling the raw data for these datasets that are useful for this research.The hourly resolution is too high for year-long scale forecasting, so we sum up the actual onshore and offshore wind generation by week, and conduct the time series analysis based on a frequency equals 52.
+
+The Figure below shows the total wind generation in Germany from 2015 to 2019. The overall wind generation is the sum of the onshore and offshore wind generation, which is shown in dark blue. Since the offshore wind generation only takes a small portion in overall wind generation, the pattern of the overall wind generation is largely based on the onshore wind generation series. In this project, we conducted forecasting of onshore and offshore wind generation separately. 
+```{r Initial Plots,fig.cap=paste("Wind Generation in Germany 2015-2019"), message=FALSE, warning=FALSE}
+#Plot 
+ggplot(sample, aes(x=Time, y=Weekly_Wind_Gen)) +
+  geom_line(color="blue") +
+  ylab("Wind Generation (MW)") +
+  geom_line(aes(y=Weekly_Offwind_Gen, col="Offshore Wind"))+
+  geom_line(aes(y=Weekly_OnWind_Gen, col="Onshore Wind"))+
+  theme(legend.position = "right") +
+  scale_x_date(date_breaks = "1 years", date_labels = "%Y")+
+  ylab("Wind Generation (MW)")+
+  labs(colour="Energy Type")
+```
+
+
+
+\newpage
+
+## Onshore
+The original onshore wind data series is shown in the following figure, there is a clear overall trends over 5 year spend, and strong seasonality is shown in the figure. There is a slow decay in both ACF and PACF. However, the original data does not form high accuracy in forecasting, so we are using logged onshore data for better forecast performance.
+```{r Onshore wind generation data,fig.cap=paste("Onshore Wind Generation"),fig.cap=paste("ACF and PACF of Onshore Wind Generation")}
+#look at onshore data first
+Onshore_sample_ts <- sample_ts[,3]
+Onshore_full_ts <- full_ts[,3]
+
+plot(Onshore_sample_ts, 
+     xlab="Time", 
+     ylab="Onshore Wind Generation (MW)",
+     col="blue")
+
+#ACF and PACF plots
+par(mar=c(3,3,3,0));par(mfrow=c(1,2))
+Acf(Onshore_sample_ts, lag = 100, plot = TRUE,main="ACF of Onshore wind")
+Pacf(Onshore_sample_ts, lag = 100, plot = TRUE,main="PACF of Onshore wind")
+```
+
+## Onshore Wind data (log)
+A multiplicative time series can be converted to additive by taking a log of the time series. We calculated the logged onshore wind generation, and the following figure is the logged weekly onshore wind generation and the ACF and PACF graph of this time series.
+```{r Onshore wind generation data(log),fig.cap=paste("Loggged Onshore Wind Generation"), message=FALSE, warning=FALSE, results='hide'}
+#A multiplicative time series can be converted to additive by taking a log of the time series.
+#log  data
+Onshore_sample_logts <- log (Onshore_sample_ts)
+Onshore_full_logts <- log (Onshore_full_ts) 
+
+plot(Onshore_sample_logts, col = 'blue')
+
+#ACF and PACF for logged data
+par(mar=c(3,3,3,0));par(mfrow=c(1,2))
+Acf(Onshore_sample_logts, lag = 100, plot = TRUE,main="ACF of Logged Onshore Wind Data")
+Pacf(Onshore_sample_logts, lag = 100, plot = TRUE,main="PACF of Logged Onshore Wind Data")
+
+# Create new logged sample data frame
+TimeSample <- as.Date(sample$Time)
+OnshoreSample_log <- cbind.data.frame(TimeSample, Onshore_sample_logts)
+str(OnshoreSample_log)
+class(OnshoreSample_log)
+head(OnshoreSample_log)
+
+# Create new logged full data frame
+TimeFull <- as.Date(full$Time)
+OnshoreFull_log <- cbind.data.frame(TimeFull, Onshore_full_logts)
+str(OnshoreFull_log)
+class(OnshoreFull_log)
+head(OnshoreFull_log)
+```
+The decompose() splits the time series into seasonality, trend and error components.This step is to identify if a time series is additive or multiplicative: IF the variance in the graph is constant through out from central line then its additive else multiplicative. Additive model is used when the variance of the time series doesn't change over different values of the time series. On the other hand, if the variance is higher when the time series is higher then it often means we should use a multiplicative models. In this case, the size of the seasonal and random fluctuations change over time and the level of the time series, it is a multiplicative time series.
+
+The following graph is the decomposition result of the onshore wind generation. The trend component is an increasing pattern. The random component is kind of randomness, so there still are some seasonality on that.
+
+```{r On: Decompose, fig.cap=paste("Decomposition of Logged Onshore Wind Generation")}
+#The decompose() splits the time series into seasonality, trend and error components.
+#Identify if a timeseries is additive or multiplicative: IF the variance in the graph is constant through out from central line then its additive else multiplicative.
+
+#Additive model is used when the variance of the time series doesn't change over different values of the time series.
+#On the other hand, if the variance is higher when the time series is higher then it often means we should use a multiplicative models.
+
+#In this case, the size of the seasonal and random fluctuations change over time and the level of the time series, it is a multiplicative time series.
+
+Onshore_sample_logts_decompose <- decompose(Onshore_sample_logts,type = "additive")
+plot(Onshore_sample_logts_decompose,yax.flip = TRUE)
+
+##The trend component is an increasing pattern. The random component is kind of randomness, so there still are some seasonality on that.
+```
+
+To test whether there is a drift or a trend for the return, we use the Augmented Dickey–Fuller (ADF) test.Start by running ADF to check for unit root. Unit root is related to stochastic trend. This test hypothesis setting is that : H0: data has unit root; H1: data is stationary. The result shows that p-value greater then 0.05, so we accept H0, meaning the series does have a stochastic trend (H0). Next step is to difference the series to remove the trend and we set hte difference of the data at lag 1
+
+For the Mann Kendall test, since there is a seasonality in data, "seasonal Mann Kendall" is suitable for this case. The results shows that p-value less < 0.05, we reject null hypothesis. time and onshore wind generation have significant positive correlation, and data has a derterministic trend.
+
+```{r On: ADF and Mann Kendall,results='hide'}
+## Run stationarity and derterministic test
+
+#Run ADF
+#Start by running ADF to check for unit root. Unit root is related to stochastic trend
+# H0: data has unit root
+# H1: data is stationary
+
+print("Results for ADF test:")
+print((adf.test(Onshore_sample_logts,alternative="stationary")))
+#Note that p-value greater then 0.05, so we accept H0, meaning the series does  have a stochastic trend (H0).
+#Next step is to difference the series to remove the trend.
+#Difference the data at lag 1
+
+
+#Run Mann Kendall
+#There is seasonality in data, so use "SeasonalMannKendall"
+# H0: There is no trend present in the data (stationary)
+# H1: A trend is present in the data
+
+print("Results for Mann Kendall:") 
+print(summary(SeasonalMannKendall(Onshore_sample_logts)))
+#p-value less < 0.05, we reject null hypothesis. time and onshore wind generation have significant positive correlation, and data has a derterministic trend.
+
+
+
+```
+We run the ndiffs tool to determine the number of differencing needed, in this case, first-differencing is need to remove a liner trend. Following is the logged onshore wind generation after first differencing and corresponding ACF and PACF.
+
+```{r On: Trends Anlysis, fig.cap=paste("Logged Onshore Wind Generation after first differencing"), results='hide'}
+#first-differencing a time series will remove a linear trend (i.e., differences = 1); 
+#twice-differencing will remove a quadratic trend (i.e., differences = 2). 
+#In addition, first-differencing a time series at a lag equal to the period will remove a seasonal trend
+
+ndiffs(Onshore_sample_logts) # number for differencing needed
+Onshore_sample_logts_diff <- diff(Onshore_sample_logts, differences = 1)   
+
+#plot
+plot(Onshore_sample_logts_diff)
+
+#ACF and PACF plots
+par(mar=c(3,3,3,0));par(mfrow=c(1,2))
+Acf(Onshore_sample_logts_diff, lag = 100, plot = TRUE,main="ACF of Onshore wind")
+Pacf(Onshore_sample_logts_diff, lag = 100, plot = TRUE,main="PACF of Onshore wind")
+```
+We also deseasonalize the logged data using the seasadj(), following figure shows the difference between the depersonalized logged onshore data and the original data.
+
+```{r On: seasadj(), message=FALSE, warning=FALSE, results='hide',fig.cap=('Deseasonalized logged onshore wind generation')}
+# number for seasonal differencing needed
+nsdiffs(Onshore_sample_logts)
+
+stl_Onshore_sample_logts <- stl(Onshore_sample_logts,"periodic")  # decompose the TS
+deseasonal_Onshore_sample_logts <- seasadj(stl_Onshore_sample_logts)  # de-seasonalize
+#Plot series
+#plot(deseasonal_Onshore_sample_logts, col ="blue")
+
+ggplot(OnshoreSample_log, aes(x=TimeSample, y=Onshore_sample_logts)) +
+  geom_line(color="orange") +
+  ylab("Logged Wind Generation (MW)") +
+  #geom_smooth(color="red",method="lm") +
+  geom_line(aes(y=deseasonal_Onshore_sample_logts), col="blue")+
+  geom_smooth(aes(y=deseasonal_Onshore_sample_logts),color="purple",method="lm") 
+
+#ACF and PACF plots
+par(mfrow=c(1,2))
+Acf(deseasonal_Onshore_sample_logts, lag = 100, plot = TRUE,main="")
+Pacf(deseasonal_Onshore_sample_logts, lag = 100, plot = TRUE,main="")
+```
+
+
+\newpage
+
+## Offshore
+
+The original offshore wind generation has shown in below figure. Since the offshore wind generation only make up a small portion of the total wind generation, the trends is not obvious when its plotted with the onshore wind. From the plot of the offshore wind generation data, there is a clear increasing trend but the seasonality is not clear. There is a slow decay in both the ACF and PACF graph.
+
+```{r Covert offshore data to Time Series, fig.cap="Offshore Wind Generation in Germany 2015-2019", results='hide'}
+#look at offshore data first
+#Offshore_sample_ts <- sample_ts[,2]
+#Offshore_full_ts <- full_ts[,2]
+
+sample_ts2<-ts(sample[,2:4], frequency = 52, start = c(2015,1,1), end = c(2020,01,01))
+full_ts2<-ts(full[,2:4], frequency = 52, start = c(2015,1,1))
+
+Offshore_sample_ts <- sample_ts2[,2]
+Offshore_full_ts <- full_ts2[,2]
+
+plot(Offshore_sample_ts, 
+     xlab="Time", 
+     ylab="Offshore Wind Generation (MW)",
+     col="blue")
+
+#ACF and PACF plots
+par(mar=c(3,3,3,0));par(mfrow=c(1,2))
+Acf(Offshore_sample_ts, lag = 100, plot = TRUE,main="ACF of Offhore wind")
+Pacf(Offshore_sample_ts, lag = 100, plot = TRUE,main="PACF of Offshore wind")
+```
+
+The following graph is the decomposition result of the onshore wind generation. The trend component is an increasing pattern. The random component is kind of randomness that looks like white noise.
+
+```{r Offshore decomposation,results='hide'}
+Offshore_sample_ts_decompose <- decompose(Offshore_sample_ts,type = "additive")
+plot(Offshore_sample_ts_decompose,yax.flip = TRUE)
+```
+
+To test whether there is a drift or a trend for the return, we use the Augmented Dickey–Fuller (ADF) test.The result shows that p-value greater then 0.05, so we accept H0, meaning the series does have a stochastic trend (H0). Next step is to difference the series to remove the trend. For the Mann Kendall test, pvalue less < 0.05, so it's safe to reject null hypothesis. Data has a deterministic trend.
+
+```{r Off: stationary and deterministic test, results="hide"}
+print("Results for ADF test:")
+print((adf.test(Offshore_sample_ts,alternative="stationary")))
+
+print("Results for Mann Kendall:") 
+print(summary(SeasonalMannKendall(Offshore_sample_ts)))
+```
+We run the ndiffs() tool to determine the number of differencing needed, in this case, first-differencing is need to remove a liner trend. Following is the offshore wind generation after first differencing and corresponding ACF and PACF.
+
+```{r Off: Trend analysis, results='hide'}
+ndiffs(Offshore_sample_ts) # number for differencing needed
+Offshore_sample_ts_diff <- diff(Offshore_sample_ts, differences = 1)   
+
+#plot
+plot(Offshore_sample_ts_diff)
+
+#ACF and PACF plots
+par(mar=c(3,3,3,0));par(mfrow=c(1,2))
+Acf(Offshore_sample_ts_diff, lag = 100, plot = TRUE,main="ACF of Offshore wind")
+Pacf(Offshore_sample_ts_diff, lag = 100, plot = TRUE,main="PACF of Offshore wind")
+```
+We also deseasonalize the offshore data using the seasadj(), following figure shows the difference between the depersonalized offshore data and corresponding ACF and PACF.
+
+```{r Off:Seasonality analysis, warning=FALSE, message=FALSE}
+# number for seasonal differencing needed
+nsdiffs(Offshore_sample_ts)
+
+stl_Offshore_sample_ts <- stl(Offshore_sample_ts,"periodic")  # decompose the TS
+deseasonal_Offshore_sample_ts <- seasadj(stl_Offshore_sample_ts)  # de-seasonalize
+
+#Plot series
+plot(deseasonal_Offshore_sample_ts, col ="blue")
+
+ggplot(sample, aes(x=Time, y=Weekly_Offwind_Gen)) +
+  geom_line(color="orange") +
+  ylab("Wind Generation (MW)") +
+  #geom_smooth(color="red",method="lm") +
+  geom_line(aes(y=deseasonal_Offshore_sample_ts), col="blue")+
+  geom_smooth(aes(y=deseasonal_Offshore_sample_ts),color="purple",method="lm") 
+
+
+#ACF and PACF plots
+par(mfrow=c(1,2))
+Acf(deseasonal_Offshore_sample_ts, lag = 100, plot = TRUE,,main="")
+Pacf(deseasonal_Offshore_sample_ts, lag = 100, plot = TRUE,main="")
+```
+
+\newpage
+
+# Modelling and Forecasting
+
+To better perform the forecasting for 2021 wind generation, we fit the time series from 2015 to 2019 to different models, and conduct a forecast for 2020. We compare our forecasting with the actual wind generation in 2020 to determine the best model that fit the onshore and offshore wind generationn time series.
+
+```{r set forecasting horizon}
+# This is helpful whenever you need to change forecasting horizon you only need to change it here
+n_for <- 40 #play with this, change to 12, 23, 2 and check of the best model is still the same
+```
+
+## Onshore Model and Forecasting
+
+For the onshore forecasting, we are fitting models to the original (sersonal) series, we fit Arithmetric mean model using meanf(), Seasonal naive model using snaive(), ARIMA model and SARIMA model using auto.arima() to perform the forecast. We also fitted State Space Models to the original (seasonal) series, one with StructTS() and another with Exponential smoothing using es(). For better performance, we fit Complex Seasonality models to the original (seasonal) series, we have the STL + ETS, and stlf() function could fit the time series to the model. And since we have multiple seasonalities, the SARIMA model will not work. But we can work with an ARIMA model with Fourier terms for each seasonal period. And we also include TBATS, which is a trigonometric seasonal variation of BATS, and using the tbats() function to achieve it.
+```{r Create variables}
+# This is helpful whenever you need to change forecasting horizon you only need to change it here
+n_for <- 40 #play with this, change to 12, 23, 2 and check of the best model is still the same
+
+Sample_obs <- nrow(OnshoreSample_log)
+#Sample_last_obs (log)
+OnshoreSampleLast_obs <- Onshore_sample_logts[(Sample_obs-n_for+1):Sample_obs]
+
+Full_obs <- nrow(OnshoreFull_log)
+#Full_last_obs (log)
+OnshoreFullLast_obs <- Onshore_full_logts[(Full_obs-n_for+1):Full_obs] 
+
+```
+
+```{r On_Arithmetic mean, message=FALSE, warning=FALSE, fig.show='hide',results='hide'}
+OnshoreLog_MEAN_seas <- meanf(y = Onshore_sample_logts, h = n_for)
+checkresiduals(OnshoreLog_MEAN_seas)
+plot(OnshoreLog_MEAN_seas)  #plot forecasts
+#Note a clear trend on residuals series, showing that the mean is not a good to model the trend component. And aside from trend the seasonal component is also not being modeled.
+```
+
+```{r On_Seasonal naive,message=FALSE, warning=FALSE,fig.show='hide',results='hide'}
+OnshoreLog_SNAIVE_seas <- snaive(Onshore_sample_logts, h=n_for)
+checkresiduals(OnshoreLog_SNAIVE_seas)
+plot(OnshoreLog_SNAIVE_seas)
+#The residuals for the seasonal naive don't seem to have a strong trend. Because it repeats the observations that happen in a previous seasonal lag (in this case one year ago), the seasonal naive is able to model the trend and seasonal component. ACF shows no significant self correlation.
+```
+
+```{r On_ARIMA, message=FALSE, warning=FALSE, fig.show='hide',results='hide'}
+#Put the seasonality back on your forecasted values
+deseasonal_OnshoreLog_autofit <- auto.arima(deseasonal_Onshore_sample_logts)
+checkresiduals(deseasonal_OnshoreLog_autofit)
+
+deseasonal_OnshoreLog_ARIMA_for <- forecast(deseasonal_OnshoreLog_autofit, h=n_for)
+plot(deseasonal_OnshoreLog_ARIMA_for)
+
+#Seasonal component from your decompose object 
+OnshoreLog_seas<-Onshore_sample_logts_decompose$seasonal
+
+
+#check last year data
+OnshoreLog_seas[(Sample_obs-n_for+1):Sample_obs]
+
+
+OnshoreLog_ARIMA_for <-deseasonal_OnshoreLog_ARIMA_for$mean+OnshoreLog_seas[(Sample_obs-n_for+1):Sample_obs]
+
+plot(OnshoreLog_ARIMA_for)
+
+#Make plot
+par(mar=c(2,4,1,0))
+plot(Onshore_full_logts, type="l", xlab="Year",ylab="Logged Onshore Wind Generation")
+lines(OnshoreLog_ARIMA_for, col="red")
+legend("topright", 
+  legend=c("original seasonal data(2015-2020)","forecast data with seasonality (2020)"), 
+  col = c("black", "red"),
+  lty=1:1, 
+  cex=0.5)
+
+```
+
+```{r On_SARIMA, message=FALSE, warning=FALSE,fig.show='hide',results='hide'}
+# SARIMA is seasonal ARIMA and it is used with time series with seasonality.
+OnshoreLog_SARIMA_autofit <- auto.arima(Onshore_sample_logts)
+checkresiduals(OnshoreLog_SARIMA_autofit)
+
+OnshoreLog_SARIMA_for <- forecast(OnshoreLog_SARIMA_autofit,h=n_for)
+plot(OnshoreLog_SARIMA_for)
+
+## The residual series seems to be random and ACF shows no significant self correlation, but forecast plot seems not very well.
+```
+
+
+```{r On_SS Exponential smoothing, message=FALSE, warning=FALSE,fig.show='hide',results='hide'}
+# Exponential smoothing under the state space model
+# ES can be used to represent trend and seasonal
+OnshoreLog_SSES_seas <- es(Onshore_sample_logts,model="MAM",h=n_for,holdout=FALSE, silent = "output")
+plot(OnshoreLog_SSES_seas)
+checkresiduals(OnshoreLog_SSES_seas)
+
+#The best model here was a ETS(MAM) which means we are fitting an multiplicative random error, an additive trend and a multiplicative seasonal component.
+```
+
+```{r On_SS with StructTS(), message=FALSE, warning=FALSE, fig.show='hide',results='hide'}
+#type = "BSM", is a local trend model with an additional seasonal component.
+OnshoreLog_SS_seas <- StructTS(Onshore_sample_logts, type = "BSM") #seasonality: BSM
+checkresiduals(OnshoreLog_SS_seas)
+
+#Generating forecasts
+# StructTS() does not call the forecast() internally so we need one more step
+OnshoreLog_SS_for <- forecast(OnshoreLog_SS_seas,h=n_for)
+plot(OnshoreLog_SS_for)
+#Forecast plot is not very well.
+```
+
+
+```{r On_STL + ETS, message=FALSE, warning=FALSE,fig.show='hide',results='hide'}
+#Fit and forecast STL + ETS model to data
+OnshoreLog_ETS_fit <-  stlf(Onshore_sample_logts,h=n_for)
+
+#Plot foresting results
+autoplot(OnshoreLog_ETS_fit) + ylab("Logged Onshore Wind Generation")
+
+#Plot model + observed data
+autoplot(Onshore_full_logts) +
+  autolayer(OnshoreLog_ETS_fit, series="STL + ETS",PI=FALSE) +
+  ylab("Logged Onshore Wind Generation")
+```
+
+
+```{r On_ARIMA + FOURIER, message=FALSE, warning=FALSE, fig.show='hide',results='hide'}
+ 
+#Fit arima model with fourier terms as exogenous regressors
+# seasonal = FALSE is the same as P=D=Q=0
+OnshoreLog_ARIMA_Four_fit <- auto.arima(Onshore_sample_logts, 
+                             seasonal=FALSE, 
+                             lambda=0,
+                             xreg=fourier(Onshore_sample_logts, 
+                                          K=12) 
+                             )
+
+#Forecast with ARIMA fit
+#also need to specify h for fourier terms
+OnshoreLog_ARIMA_Four_for <- forecast(OnshoreLog_ARIMA_Four_fit,
+                           xreg=fourier(Onshore_sample_logts,
+                                        K=12,
+                                        h=n_for),
+                           h=n_for) 
+
+#Plot foresting results
+autoplot(OnshoreLog_ARIMA_Four_for) + ylab("Logged Onshore Wind Generation")
+
+#Plot model + observed data
+autoplot(Onshore_full_logts) +
+  autolayer(OnshoreLog_ARIMA_Four_for, series="ARIMA_FOURIER",PI=FALSE) +
+  ylab("Logged Onshore Wind Generation")
+```
+
+
+```{r On_TBATS, message=FALSE, warning=FALSE, fig.show='hide',results='hide'}
+# TBATS is a trigonometric seasonal variation of BATS
+OnshoreLog_TBATS_fit <- tbats(Onshore_sample_logts)
+
+OnshoreLog_TBATS_for <- forecast(OnshoreLog_TBATS_fit, h=n_for)
+
+#Plot foresting results
+autoplot(OnshoreLog_TBATS_for) +
+  ylab("Logged Onshore Wind Generation") 
+
+#Plot model + observed data
+autoplot(Onshore_full_logts) +
+  autolayer(OnshoreLog_TBATS_for, series="TBATS",PI=FALSE)+
+  ylab("Logged Onshore Wind Generation") 
+```
+
+The following graph is all the forecast we made for onshore wind generation in 2020 and compare it to the original actual wind generation we get from the database. For more detailed look, we remove the arithmetic mean, sarima and BSM models which clearly have poor performance. The rest of the plot shows similar pattern with the true data. 
+
+```{r All plot, fig.cap = ("Forecast for onshore wind generation in 2020"),message=FALSE, warning=FALSE}
+autoplot(Onshore_full_logts) +
+  autolayer(OnshoreLog_MEAN_seas, PI=FALSE, series="Arithmetic mean") +
+  autolayer(OnshoreLog_SNAIVE_seas, PI=FALSE, series="Seasonal Naive") +
+  autolayer(OnshoreLog_ARIMA_for, PI=FALSE, series="ARIMA") +
+  autolayer(OnshoreLog_SARIMA_for, PI=FALSE, series="SARIMA") +
+  autolayer(OnshoreLog_SSES_seas$forecast, series="SSES") +
+  autolayer(OnshoreLog_SS_for,PI=FALSE,series="BSM") + 
+  autolayer(OnshoreLog_ETS_fit, PI=FALSE, series="STL+ETS") +
+  autolayer(OnshoreLog_ARIMA_Four_for, PI=FALSE, series="ARIMA + Fourier") +
+  autolayer(OnshoreLog_TBATS_for,PI=FALSE, series="TBATS") +
+  xlab("Year") + 
+  ylab("Logged Onshore Wind Generation") +
+  guides(colour=guide_legend(title="Forecast"))
+```
+The TBATS, ARIMA + Fourier, SSES and STL+ETS shows similar pattern that mitigate the flutuation of the time series. The ARIMA model shows flatter estimation, which underestimate the generation at the beginning of the year, and overestimate in the later month. The graph shows more accurate in the plot.
+
+```{r last two years plots, fig.cap = ("Forecast for onshore wind generation in 2020 (Zoomed to 2019-2020)"),message=FALSE, warning=FALSE}
+autoplot(window(Onshore_full_logts,start=2020)) +
+  #autolayer(OnshoreLog_MEAN_seas, PI=FALSE, series="Arithmetic mean") +
+  autolayer(OnshoreLog_SNAIVE_seas, PI=FALSE, series="Seasonal Naive") +
+  autolayer(OnshoreLog_ARIMA_for, PI=FALSE, series="ARIMA") +
+  #autolayer(OnshoreLog_SARIMA_for, PI=FALSE, series="SARIMA") +
+  autolayer(OnshoreLog_SSES_seas$forecast, series="SSES") +
+  #autolayer(OnshoreLog_SS_for,PI=FALSE,series="BSM") + 
+  autolayer(OnshoreLog_ETS_fit, PI=FALSE, series="STL+ETS") +
+  autolayer(OnshoreLog_ARIMA_Four_for, PI=FALSE, series="ARIMA + Fourier") +
+  autolayer(OnshoreLog_TBATS_for,PI=FALSE, series="TBATS") +
+  xlab("Year") + 
+  ylab("Logged Onshore Wind Generation") +
+  guides(colour=guide_legend(title="Forecast"))
+```
+To statistically analysis the accuracy of the forecast based on logged data, we generate a table indicating the error of each model. We also conduct the accuracy test for exponential logged data forecasting.
+Based on the results of these two tables, we choose the TBATS as our forecast model for onshore wind generation. 
+
+```{r Accuracy Scores & table, Table 2, echo=FALSE, message=FALSE, warning=FALSE}
+#Model 1: Arithmetic mean
+#OnshoreLog_MEAN_scores <- accuracy(OnshoreLog_MEAN_seas)  #store the performance metrics
+
+#Model 2: Seasonal naive 
+OnshoreLog_SNAIVE_scores <- accuracy(OnshoreLog_SNAIVE_seas$mean, OnshoreFullLast_obs)
+#OnshoreLog_SNAIVETest_scores <- OnshoreLog_SNAIVE_scores[2]
+
+# Model 3: ARIMA
+OnshoreLog_ARIMA_for_scores <- accuracy(OnshoreLog_ARIMA_for,OnshoreFullLast_obs)  #store the performance metrics
+
+# Model 4: SARIMA
+#OnshoreLog_SARIMA_scores <- accuracy(OnshoreLog_SARIMA_fore$mean,OnshoreFullLast_obs)
+
+# Model 3:  SSES
+OnshoreLog_SSES_scores <- accuracy(OnshoreLog_SSES_seas$forecast,OnshoreFullLast_obs)
+
+# Model 6:  BSM 
+#OnshoreLog_SS_scores <- accuracy(OnshoreLog_SS_forecast$mean,OnshoreFullLast_obs)
+
+#Model 7: STL + ETS
+OnshoreLog_ETS_scores <- accuracy(OnshoreLog_ETS_fit$mean,OnshoreFullLast_obs)  
+
+#Model 8: ARIMA + Fourier 
+OnshoreLog_ARIMA_Four_scores <- accuracy(OnshoreLog_ARIMA_Four_for$mean,OnshoreFullLast_obs)
+
+# Model 9:  TBATS 
+OnshoreLog_TBATS_scores <- accuracy(OnshoreLog_TBATS_for$mean,OnshoreFullLast_obs)
+
+
+#create data frame
+Onshore_scores <- as.data.frame(
+  rbind(OnshoreLog_SNAIVE_scores, OnshoreLog_ARIMA_for_scores, OnshoreLog_SSES_scores, 
+        OnshoreLog_ETS_scores, OnshoreLog_ARIMA_Four_scores, OnshoreLog_TBATS_scores))
+row.names(Onshore_scores) <- c("SNAIVE","ARIMA","SSES","STL+ETS","ARIMA+Fourier","TBATS")
+
+#choose model with lowest MPE/RMSE
+best_model_index <- which.min(Onshore_scores[,"RMSE"])
+#cat("The best model by RMSE is:", row.names(Onshore_scores[best_model_index,]))
+
+#Create table
+library(kableExtra)
+kbl(Onshore_scores,
+    caption = "Forecast Accuracy for Data (log)",
+    digits = array(7,ncol(Onshore_scores))) %>%
+  kable_styling(full_width = FALSE, position = "center") %>%
+  #highlight model with lowest RMSE
+  #kable_styling(latex_options="striped", stripe_index = which.min(Onshore_scores[,"RMSE"]))
+  row_spec(best_model_index, bold=T, color="black", background = "yellow")
+```
+```{r Accuracy Scores (exp) & table, echo=FALSE, message=FALSE, warning=FALSE}
+#Full_last_obs
+Last_obs_exp <- Onshore_full_ts[(Full_obs-n_for+1):Full_obs] 
+
+#Model 1: Arithmetic mean
+#OnshoreLog_MEAN_scores <- accuracy(OnshoreLog_MEAN_seas)  #store the performance metrics
+
+#Model 2: Seasonal naive 
+Onshore_SNAIVE_scores <- accuracy(exp(OnshoreLog_SNAIVE_seas$mean), Last_obs_exp)
+#OnshoreLog_SNAIVETest_scores <- OnshoreLog_SNAIVE_scores[2]
+
+# Model 3: ARIMA
+Onshore_ARIMA_for_scores <- accuracy(exp(OnshoreLog_ARIMA_for),Last_obs_exp)  #store the performance metrics
+
+# Model 4: SARIMA
+#OnshoreLog_SARIMA_scores <- accuracy(OnshoreLog_SARIMA_fore$mean,OnshoreFullLast_obs)
+
+# Model 3:  SSES
+Onshore_SSES_scores <- accuracy(exp(OnshoreLog_SSES_seas$forecast),Last_obs_exp)
+
+# Model 6:  BSM 
+#OnshoreLog_SS_scores <- accuracy(OnshoreLog_SS_forecast$mean,OnshoreFullLast_obs)
+
+#Model 7: STL + ETS
+Onshore_ETS_scores <- accuracy(exp(OnshoreLog_ETS_fit$mean),Last_obs_exp)  
+
+#Model 8: ARIMA + Fourier 
+Onshore_ARIMA_Four_scores <- accuracy(exp(OnshoreLog_ARIMA_Four_for$mean),Last_obs_exp)
+
+# Model 9:  TBATS 
+Onshore_TBATS_scores <- accuracy(exp(OnshoreLog_TBATS_for$mean),Last_obs_exp)
+
+
+#create data frame
+Onshore_scores_exp <- as.data.frame(
+  rbind(Onshore_SNAIVE_scores, Onshore_ARIMA_for_scores, Onshore_SSES_scores, 
+        Onshore_ETS_scores, Onshore_ARIMA_Four_scores, Onshore_TBATS_scores))
+row.names(Onshore_scores_exp) <- c("SNAIVE","ARIMA","SSES","STL+ETS","ARIMA+Fourier","TBATS")
+
+#choose model with lowest MPE/RMSE
+best_model_index <- which.min(Onshore_scores_exp[,"RMSE"])
+#cat("The best model by RMSE is:", row.names(Onshore_scores_exp[best_model_index,]))
+
+#Create table
+library(kableExtra)
+kbl(Onshore_scores_exp,
+    caption = "Forecast Accuracy for Data (exp)",
+    digits = array(7,ncol(Onshore_scores_exp))) %>%
+  kable_styling(full_width = FALSE, position = "center") %>%
+  #highlight model with lowest RMSE
+  #kable_styling(latex_options="striped", stripe_index = which.min(Onshore_scores_exp[,"RMSE"]))
+  row_spec(best_model_index, bold=T, color="black", background = "yellow")
+```
+
+## Offshore Model and forecasting
+The offshore time series is fitted to the Sarima model using the auto.arima() fuction. And the offshore time series can also fitted to the State Space Models, one with StructTS() and another with Exponential smoothing using es(). For better performance, we fit Complex Seasonality models to the original series, we have the STL + ETS, and stlf() function could fit the time series to the model. And since we have multiple seasonalities, the SARIMA model will not work. But we can work with an ARIMA model with Fourier terms for each seasonal period. And we also include TBATS, which is a trigonometric seasonal variation of BATS, and using the tbats() function to achieve it.
+```{r Off:Sarima,message=FALSE, warning=FALSE,fig.show='hide',results='hide'}
+Offshore_sarima_autofit <- auto.arima(sample_ts[,"Weekly_Offwind_Gen"])
+print(Offshore_sarima_autofit)
+checkresiduals(Offshore_sarima_autofit)
+
+#forecast
+Offshore_sarima_forecast <- forecast(Offshore_sarima_autofit,
+                                       h = n_for)
+plot(Offshore_sarima_forecast)
+```
+
+```{r Off:Exponential smooth model and forecast,message=FALSE, warning=FALSE,fig.show='hide',results='hide'}
+Offshore_SSES_seas <- es(sample_ts[,"Weekly_Offwind_Gen"],
+                    model = "ZZZ",
+                    holdout = FALSE,
+                    h = n_for)
+plot(Offshore_SSES_seas)
+```
+
+```{r Off: BSM,message=FALSE, warning=FALSE,fig.show='hide',results='hide'}
+Offshore_SS_seas <- StructTS(sample_ts[,"Weekly_Offwind_Gen"],
+                          type = "BSM"
+                          )
+checkresiduals(Offshore_SS_seas)
+Offshore_SS_seas_forecast <- forecast(Offshore_SS_seas,h=n_for)
+plot(Offshore_SS_seas_forecast)
+```
+
+```{r Off: STL + ETS,message=FALSE, warning=FALSE,fig.show='hide',results='hide'}
+Offshore_ETS <- stlf(Offshore_sample_ts,
+                       h=n_for)
+autoplot(full_ts[,2])+
+  autolayer(Offshore_ETS, 
+            series="STL+ETS",
+            PI=FALSE)+
+  ylab("Wind Generation(MW)")
+```
+
+```{r Off：ARIMA_FOURIER,message=FALSE, warning=FALSE,fig.show='hide',results='hide'}
+Offshore_ARIMA_FOUR <- auto.arima(Offshore_sample_ts,
+                                seasonal = FALSE,
+                                lambda = 0,
+                                xreg = fourier(Offshore_sample_ts,
+                                               K=12))
+
+#forecast
+Offshore_ARIMA_FOUR_forecast <- forecast(Offshore_ARIMA_FOUR,
+                                           xreg = fourier(Offshore_sample_ts,
+                                                          K=12,
+                                                          h=n_for),
+                                           h=n_for)
+```
+
+```{r Off: TBATS,message=FALSE, warning=FALSE,fig.show='hide',results='hide'}
+Offshore_TBATS <- tbats(Offshore_sample_ts)
+
+#forecast
+Offshore_TBATS_forecast <- forecast(Offshore_TBATS,
+                                      h=n_for)
+```
+
+The following graphs are all the forecast we made for offshore wind generation in 2020 and compare it to the original actual wind generation we get from the database. For more detailed look, only the data for 2020 are shown on the second map, and the BSM, Sarima and SSES model are removed due to poor performance. The Arima_founier model underestimate the first half year and overestimate the last half year. The STL+ETS and TBATS models are having same trends, but STL+ETS model have more flutuation. 
+
+```{r Plotting all fitted models}
+#All year
+autoplot(full_ts[,"Weekly_Offwind_Gen"])+
+  autolayer(Offshore_sarima_forecast, PI = FALSE, series = "SARIMA")+
+  autolayer(Offshore_SS_seas_forecast, PI = FALSE, series = "BSM")+
+  autolayer(Offshore_SSES_seas$forecast, series = "SSES")+
+  autolayer(Offshore_ETS, 
+            series="STL+ETS",
+            PI=FALSE)+
+  autolayer(Offshore_ARIMA_FOUR_forecast,
+            series = "ARIMA_Fourier",
+            PI=FALSE)+
+  autolayer(Offshore_TBATS_forecast,
+            series = "TBATS",
+            PI=FALSE)+
+  xlab("Year")+
+  ylab("Generation(MW)")+
+    guides(colour=guide_legend(title="Forecast"))
+
+#Last 2 years
+autoplot(full_ts[,"Weekly_Offwind_Gen"])+
+  #autolayer(Offshore_sarima_forecast, PI = FALSE, series = "SARIMA")+
+  #autolayer(Offshore_SS_seas_forecast, PI = FALSE, series = "BSM")+
+  #autolayer(Offshore_SSES_seas$forecast, series = "SSES")+
+  autolayer(Offshore_ETS, 
+            series="STL+ETS",
+            PI=FALSE)+
+  autolayer(Offshore_ARIMA_FOUR_forecast,
+            series = "ARIMA_Fourier",
+            PI=FALSE)+
+  autolayer(Offshore_TBATS_forecast,
+            series = "TBATS",
+            PI=FALSE)+
+  xlab("Year")+
+  ylab("Generation(MW)")+
+  coord_cartesian(xlim = c(2020,2021))+
+    guides(colour=guide_legend(title="Forecast"))
+```
+To statistically analysis the accuracy of the forecast based on the offshore wind generation data, we generate a table indicating the error of each model. Based on the results, we choose the TBATS as our forecast model for onshore wind generation due to the smallest Mean Absolute Percentage Error. 
+
+```{r Off:Accuracy}
+#Accuracy
+last_obs <- full_ts[262:300,"Weekly_Offwind_Gen"]
+
+sarima_score <- accuracy(Offshore_sarima_forecast$mean, last_obs)
+sses_score <- accuracy(Offshore_SSES_seas$forecast, last_obs)
+bsm_score <- accuracy(Offshore_SS_seas_forecast$mean, last_obs)
+ets_score <- accuracy(Offshore_ETS$mean,last_obs)
+arima_four_score <- accuracy(Offshore_ARIMA_FOUR_forecast$mean,last_obs)
+tbats_score <- accuracy(Offshore_TBATS_forecast$mean,last_obs)
+
+#create dataframe
+score_table <-rbind.data.frame(sarima_score,
+                               sses_score,
+                               bsm_score,
+                               ets_score,
+                               arima_four_score,
+                               tbats_score)
+
+best_model_index <- which.min(score_table[,"MAPE"])
+
+rownames(score_table) <- c("SARIMA","SSES","BSM","ETS","ARIMA_FOURIER","TBATS")
+kbl(score_table, 
+      caption = "Forecast Accuracy",
+      digits = array(5,ncol(score_table))) %>%
+  kable_styling(full_width = FALSE, position = "center") %>%
+  #kable_styling(latex_options="striped", stripe_index = which.min(score_table[,"MAPE"]))
+  row_spec(best_model_index, bold=T, color="black", background = "yellow")
+```
+
+
+\newpage
+
+# Forecast Output
+A 52 weeks forecast is conducted based on the actual onshore and offshore wind energy generation in Germany. 
+## Forecast Onshore Wind Generation in 2021
+```{r Forecast 2021 varible}
+n_week <- 6*52-Full_obs+52
+
+```
+According to the analysis of the forecasting performance, we choose the TBATS model to fit the 2015 to 2020 time series dataset and conduct a forecast for the onshore wind generation in next 52 weeks after September 2020. The following figure shows our forecast for the onshore wind generation in 2021. It have strong performance with the seasonality but weaker performance in randomness and overall trends. According to our forecasting, the 2021 will have high wind generation at the beginning and the ending of 2021, and have a relatively lower productivity season during the mid-2021.
+```{r TBATS2021, message=FALSE, warning=FALSE}
+# Lowest RMSE, MAE, MAPE in Accuracy table (logged and exponential one)
+# TBATS is a trigonometric seasonal variation of BATS
+OnshoreLog_TBATS_fit2021 <- tbats(Onshore_full_logts)
+
+OnshoreLog_TBATS_for2021 <- forecast(OnshoreLog_TBATS_fit2021, h=n_week)
+
+
+#Plot model + observed data
+autoplot(Onshore_full_ts) +
+  autolayer(exp(OnshoreLog_TBATS_for2021$mean), series="Mean TBATS",PI=FALSE)+
+  autolayer(exp(OnshoreLog_TBATS_for2021$lower), series="Lower TBATS",PI=FALSE)+
+  autolayer(exp(OnshoreLog_TBATS_for2021$upper), series="Upper TBATS",PI=FALSE)+
+  ylab("Onshore Wind Generation (MW)") 
+```
+
+## Forecast Offshore Wind Generation in 2021
+According to the analysis of the forecasting performance, we choose the STL+ETS model to fit the 2015 to 2020 time series dataset and conduct a forecast for the offshore wind generation in next 52 weeks after September 2020. The following figure shows our forecast for the offshore wind generation in 2021. It have strong performance with the ramdomness of the data but have less strength in seasonality and overall trends. According to our forecast, the wind generation in late 2020 and early 2021 will be similar to the mid-2020, and it will decrease during the mid-2021, and acsending back to the early 2021 level at late 2021.
+```{r ETS forecast 2021}
+#MSTS
+Offshore_full_msts <- msts(full$Weekly_Offwind_Gen,
+                    seasonal.periods = c(52),
+                    start = c(2015,01,01))
+
+#STL + ETS
+offshore_full2021_ets_fit <- stlf(Offshore_full_msts,
+                       h=52)
+autoplot(full_ts[,2])+
+  autolayer(offshore_full2021_ets_fit, 
+            series="STL+ETS",
+            PI=FALSE)+
+  ylab("Wind Generation(MW)")
+
+```
+
+\newpage
+
+# Forecast Limitation
+There are a few limitation of this project. The first one is that the model and forecast option we conducted in this project only works in Germany due to the climate variation. For other European countries, the time series data should be fitted to other model for more accurate forecasts. The second one is that because of the development of the renewable energy, there are considerable number of the new wind power infrustructure are built in Germany, and this is a influence on the overall trend of this set of data. The future installation is hard to forecast due to possible economic recession or pandemic, for example the COVID crisis. The last limitation that is important is the intermitte nature of the wind, we are not able to include the adjustment about the unexpected extreme weather in our wind generation forecast.
+
